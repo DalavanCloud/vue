@@ -3502,6 +3502,12 @@ function copyAugment (target, src, keys) {
 }
 
 /**
+ * A dummy variable used to trigger reactive property deletion.
+ * Takes advantage of the fact that no two objects are equal.
+ */
+var DELETE_ME = {};
+
+/**
  * Attempt to create an observer instance for a value,
  * returns the new observer if successfully observed,
  * or the existing observer if the value already has one.
@@ -3571,19 +3577,53 @@ function defineReactive$$1 (
       if (newVal === value || (newVal !== newVal && value !== value)) {
         return
       }
-      /* eslint-enable no-self-compare */
-      if (process.env.NODE_ENV !== 'production' && customSetter) {
-        customSetter();
-      }
-      if (setter) {
-        setter.call(obj, newVal);
+      if (newVal === DELETE_ME) {
+        delete obj[key];
       } else {
-        val = newVal;
+        /* eslint-enable no-self-compare */
+        if (process.env.NODE_ENV !== 'production' && customSetter) {
+          customSetter();
+        }
+        if (setter) {
+          setter.call(obj, newVal);
+        } else {
+          val = newVal;
+        }
+        childOb = observe(newVal);
       }
-      childOb = observe(newVal);
       dep.notify();
     }
   });
+}
+
+/**
+ * Gets a property from an object. If the property does not exist, sets it to
+ * the default value. If the third argument is not given, sets the value to
+ * undefined. This method should be used to avoid a global notify when adding
+ * a new property via Vue.set().
+ */
+function get (target, key, defaultVal) {
+  if (Array.isArray(target)) {
+    target.length = Math.max(target.length, key);
+    return target[key]
+  }
+  if (hasOwn(target, key)) {
+    return target[key]
+  }
+  var ob = target.__ob__;
+  if (target._isVue || (ob && ob.vmCount)) {
+    process.env.NODE_ENV !== 'production' && warn$2(
+      'Avoid adding reactive properties to a Vue instance or its root $data ' +
+      'at runtime - declare it upfront in the data option.'
+    );
+    return defaultVal
+  }
+  if (!ob) {
+    target[key] = defaultVal;
+    return defaultVal
+  }
+  defineReactive$$1(ob.value, key, defaultVal);
+  return target[key] // triggers depend() on the property's dep
 }
 
 /**
@@ -3637,11 +3677,15 @@ function del (target, key) {
   if (!hasOwn(target, key)) {
     return
   }
-  delete target[key];
   if (!ob) {
+    delete target[key];
     return
   }
-  ob.dep.notify();
+  var oldValue = target[key];
+  target[key] = DELETE_ME;
+  if (typeof oldValue === 'object' && oldValue.__ob__) {
+    oldValue.__ob__.dep.notify();
+  }
 }
 
 /**
@@ -4784,6 +4828,7 @@ function stateMixin (Vue) {
   Object.defineProperty(Vue.prototype, '$data', dataDef);
   Object.defineProperty(Vue.prototype, '$props', propsDef);
 
+  Vue.prototype.$get = get;
   Vue.prototype.$set = set;
   Vue.prototype.$delete = del;
 
